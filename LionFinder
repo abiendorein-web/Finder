@@ -1,0 +1,1716 @@
+-- =====================================================================
+--   LION SCANNER v2.2 — CHUNK 1 of 2
+--   Device chooser · Smaller UI · Glow fades · Cool images
+-- =====================================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local CoreGui = game:GetService("CoreGui")
+local LocalPlayer = Players.LocalPlayer
+
+local VERSION = "2.2"
+
+local C = {
+    bg = Color3.fromRGB(6, 6, 8),
+    bg2 = Color3.fromRGB(14, 14, 18),
+    card = Color3.fromRGB(20, 20, 26),
+    cardHover = Color3.fromRGB(32, 32, 40),
+    white = Color3.fromRGB(255, 255, 255),
+    dim = Color3.fromRGB(140, 140, 155),
+    dim2 = Color3.fromRGB(80, 80, 95),
+    border = Color3.fromRGB(45, 45, 55),
+    borderHi = Color3.fromRGB(110, 110, 130),
+    control = Color3.fromRGB(26, 26, 34),
+    controlHover = Color3.fromRGB(42, 42, 52),
+    green = Color3.fromRGB(80, 255, 130),
+    blue = Color3.fromRGB(80, 180, 255),
+    red = Color3.fromRGB(255, 80, 80),
+    cyan = Color3.fromRGB(80, 220, 255),
+    purple = Color3.fromRGB(180, 120, 255),
+}
+
+local ASSET_ICONS = {
+    search = "rbxassetid://70535501526554",
+    image = "rbxassetid://78401440911863",
+    sound = "rbxassetid://118699437705899",
+    mesh = "rbxassetid://98802004692130",
+    remote = "rbxassetid://119974381854766",
+    pin = "rbxassetid://75961567508304",
+    link = "rbxassetid://124086403140943",
+    filter = "rbxassetid://113916583086087",
+    arrow = "rbxassetid://121812430510109",
+    close = "rbxassetid://129170850548902",
+}
+
+local Settings = {
+    device = "mobile",
+    totalCount = 0,
+    tabCounts = {},
+    pinned = {},
+    sort = "az",
+    searchHistory = {},
+}
+
+local PIN_FILE = "LionScanner_Pinned.json"
+pcall(function()
+    if readfile and isfile and isfile(PIN_FILE) then
+        local ok, data = pcall(function() return HttpService:JSONDecode(readfile(PIN_FILE)) end)
+        if ok and type(data) == "table" then
+            Settings.pinned = data
+        end
+    end
+end)
+
+local function savePins()
+    if writefile then
+        pcall(function()
+            writefile(PIN_FILE, HttpService:JSONEncode(Settings.pinned))
+        end)
+    end
+end
+
+if CoreGui:FindFirstChild("LionScanner") then CoreGui.LionScanner:Destroy() end
+if CoreGui:FindFirstChild("LionScannerDevice") then CoreGui.LionScannerDevice:Destroy() end
+
+local function addCorner(p, r)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, r or 8)
+    c.Parent = p
+    return c
+end
+
+local function addStroke(p, t, col)
+    local s = Instance.new("UIStroke")
+    s.Thickness = t or 1
+    s.Color = col or C.border
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    s.Parent = p
+    return s
+end
+
+local function safeParent()
+    if gethui then
+        local ok, h = pcall(gethui)
+        if ok and h then return h end
+    end
+    return CoreGui
+end
+
+local function copyToClipboard(text)
+    if setclipboard then
+        local ok = pcall(function() setclipboard(text) end)
+        if ok then return true end
+    end
+    if syn and syn.setclipboard then
+        local ok = pcall(function() syn.setclipboard(text) end)
+        if ok then return true end
+    end
+    if toclipboard then
+        local ok = pcall(function() toclipboard(text) end)
+        if ok then return true end
+    end
+    return false
+end
+
+local function extractId(str)
+    if not str or type(str) ~= "string" then return nil end
+    local id = string.match(str, "rbxassetid://(%d+)")
+    if id then return id end
+    id = string.match(str, "rbxasset://(%d+)")
+    return id
+end
+
+local function getStatusColor(count)
+    if count == 0 then return C.red
+    elseif count < 50 then return C.blue
+    else return C.green end
+end
+
+-- ===================== MARKETPLACE FETCH =====================
+local AssetCache = {}
+local FetchQueue = {}
+
+local function rawRequest(url)
+    if syn and syn.request then
+        local ok, r = pcall(syn.request, {Url = url, Method = "GET"})
+        if ok and r then return r.Body end
+    end
+    if http_request then
+        local ok, r = pcall(http_request, {Url = url, Method = "GET"})
+        if ok and r then return r.Body end
+    end
+    if request then
+        local ok, r = pcall(request, {Url = url, Method = "GET"})
+        if ok and r then return r.Body end
+    end
+    local ok, body = pcall(function() return game:HttpGet(url) end)
+    if ok then return body end
+    return nil
+end
+
+task.spawn(function()
+    while true do
+        if #FetchQueue > 0 then
+            local batch = {}
+            for i = 1, 3 do
+                if #FetchQueue > 0 then
+                    table.insert(batch, table.remove(FetchQueue, 1))
+                end
+            end
+            for _, item in ipairs(batch) do
+                task.spawn(function()
+                    local id = item.id
+                    local url = "https://economy.roblox.com/v2/assets/" .. id .. "/details"
+                    local body = rawRequest(url)
+                    if body then
+                        local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
+                        if ok and data and data.Name then
+                            AssetCache[id] = {
+                                name = data.Name,
+                                creator = data.Creator and data.Creator.Name or nil,
+                            }
+                        else
+                            AssetCache[id] = {failed = true}
+                        end
+                    else
+                        AssetCache[id] = {failed = true}
+                    end
+                end)
+            end
+            task.wait(1.1)
+        else
+            task.wait(0.2)
+        end
+    end
+end)
+
+local GENERIC_NAMES = {
+    ["ImageLabel"]=true, ["ImageButton"]=true, ["Frame"]=true,
+    ["Icon"]=true, ["Image"]=true, ["Thumbnail"]=true, ["Logo"]=true,
+    ["Preview"]=true, ["Banner"]=true, ["Photo"]=true, ["Picture"]=true,
+    ["Background"]=true, ["Texture"]=true, ["Decal"]=true, ["Sound"]=true,
+    ["MeshPart"]=true, ["SpecialMesh"]=true, ["Animation"]=true,
+    ["ParticleEmitter"]=true, ["Beam"]=true, ["Trail"]=true,
+    ["Part"]=true, ["Mesh"]=true, ["Button"]=true, ["Contents"]=true,
+}
+
+local function isGeneric(name)
+    if not name then return true end
+    if GENERIC_NAMES[name] then return true end
+    if name:match("^Icon%d+$") then return true end
+    if name:match("^Image%d+$") then return true end
+    if name:match("^Frame%d+$") then return true end
+    if name:match("^Grid%d+$") then return true end
+    if #name < 3 then return true end
+    return false
+end
+
+local function fallbackName(obj, id)
+    local raw = tostring(obj.Name or "Unknown")
+    if not isGeneric(raw) then return raw end
+    local context = {}
+    local parent = obj.Parent
+    local depth = 0
+    while parent and depth < 4 do
+        local pName = tostring(parent.Name or "")
+        if not isGeneric(pName) then
+            table.insert(context, 1, pName)
+        end
+        parent = parent.Parent
+        depth = depth + 1
+    end
+    if #context > 0 then
+        return table.concat(context, " · ")
+    end
+    return obj.ClassName .. " · " .. (id and id:sub(1, 6) or "?")
+end
+
+local FastTween = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local BounceTween = TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local GlowTween = TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+
+-- ===================== DEVICE CHOOSER =====================
+local DeviceGui = Instance.new("ScreenGui")
+DeviceGui.Name = "LionScannerDevice"
+DeviceGui.ResetOnSpawn = false
+DeviceGui.DisplayOrder = 1000
+DeviceGui.IgnoreGuiInset = true
+pcall(function() DeviceGui.Parent = safeParent() end)
+
+local DevMain = Instance.new("Frame", DeviceGui)
+DevMain.AnchorPoint = Vector2.new(0.5, 0.5)
+DevMain.Position = UDim2.new(0.5, 0, 0.5, 0)
+DevMain.Size = UDim2.new(0, 340, 0, 260)
+DevMain.BackgroundColor3 = C.bg
+DevMain.BorderSizePixel = 0
+DevMain.Active = true
+DevMain.Draggable = true
+addCorner(DevMain, 16)
+local devStroke = addStroke(DevMain, 2, C.cyan)
+
+DevMain.Size = UDim2.new(0, 0, 0, 0)
+DevMain.BackgroundTransparency = 1
+task.spawn(function()
+    task.wait(0.05)
+    TweenService:Create(DevMain, BounceTween, {
+        Size = UDim2.new(0, 340, 0, 260),
+        BackgroundTransparency = 0
+    }):Play()
+end)
+
+task.spawn(function()
+    while DevMain.Parent do
+        TweenService:Create(devStroke, GlowTween, {Transparency = 0.7}):Play()
+        task.wait(1.5)
+        if not DevMain.Parent then break end
+        TweenService:Create(devStroke, GlowTween, {Transparency = 0}):Play()
+        task.wait(1.5)
+    end
+end)
+
+local devTitle = Instance.new("TextLabel", DevMain)
+devTitle.Size = UDim2.new(1, -20, 0, 30)
+devTitle.Position = UDim2.new(0, 10, 0, 16)
+devTitle.BackgroundTransparency = 1
+devTitle.Font = Enum.Font.GothamBlack
+devTitle.Text = "SELECT YOUR DEVICE"
+devTitle.TextColor3 = C.white
+devTitle.TextSize = 16
+
+local devSub = Instance.new("TextLabel", DevMain)
+devSub.Size = UDim2.new(1, -20, 0, 16)
+devSub.Position = UDim2.new(0, 10, 0, 46)
+devSub.BackgroundTransparency = 1
+devSub.Font = Enum.Font.Gotham
+devSub.Text = "Adjusts UI size for your screen"
+devSub.TextColor3 = C.dim
+devSub.TextSize = 10
+
+local deviceOptions = {
+    {name = "MOBILE", key = "mobile", size = 1.0, color = C.cyan},
+    {name = "PC", key = "pc", size = 1.15, color = C.green},
+    {name = "CONSOLE", key = "console", size = 1.3, color = C.purple},
+}
+
+local function chooseDevice(key, size)
+    Settings.device = key
+    DeviceGui:Destroy()
+    -- Fire event to build main UI at chosen size
+    _G.LionScannerBuild(size)
+end
+
+for i, opt in ipairs(deviceOptions) do
+    local btn = Instance.new("TextButton", DevMain)
+    btn.Size = UDim2.new(1, -32, 0, 44)
+    btn.Position = UDim2.new(0, 16, 0, 80 + (i - 1) * 52)
+    btn.BackgroundColor3 = C.card
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Text = ""
+    addCorner(btn, 10)
+    local optStroke = addStroke(btn, 1.5, C.border)
+
+    local bar = Instance.new("Frame", btn)
+    bar.Size = UDim2.new(0, 3, 0.6, 0)
+    bar.Position = UDim2.new(0, 0, 0.2, 0)
+    bar.BackgroundColor3 = opt.color
+    bar.BorderSizePixel = 0
+    addCorner(bar, 3)
+
+    local lbl = Instance.new("TextLabel", btn)
+    lbl.Size = UDim2.new(1, -40, 1, 0)
+    lbl.Position = UDim2.new(0, 16, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.GothamBlack
+    lbl.Text = opt.name
+    lbl.TextColor3 = C.white
+    lbl.TextSize = 14
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local arrowLbl = Instance.new("TextLabel", btn)
+    arrowLbl.AnchorPoint = Vector2.new(1, 0.5)
+    arrowLbl.Position = UDim2.new(1, -14, 0.5, 0)
+    arrowLbl.Size = UDim2.new(0, 20, 1, 0)
+    arrowLbl.BackgroundTransparency = 1
+    arrowLbl.Font = Enum.Font.GothamBlack
+    arrowLbl.Text = "▶"
+    arrowLbl.TextColor3 = opt.color
+    arrowLbl.TextSize = 16
+
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, FastTween, {BackgroundColor3 = C.cardHover}):Play()
+        TweenService:Create(optStroke, FastTween, {Color = opt.color, Transparency = 0}):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, FastTween, {BackgroundColor3 = C.card}):Play()
+        TweenService:Create(optStroke, FastTween, {Color = C.border}):Play()
+    end)
+    btn.MouseButton1Click:Connect(function()
+        chooseDevice(opt.key, opt.size)
+    end)
+end
+
+-- ===================== MAIN UI BUILDER =====================
+_G.LionScannerBuild = function(scale)
+    local W, H = math.floor(500 * scale), math.floor(460 * scale)
+
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "LionScanner"
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.DisplayOrder = 999
+    ScreenGui.IgnoreGuiInset = true
+    pcall(function() ScreenGui.Parent = safeParent() end)
+    if not ScreenGui.Parent then
+        ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    end
+
+    -- MIN BAR
+    local MinBar = Instance.new("Frame", ScreenGui)
+    MinBar.AnchorPoint = Vector2.new(0.5, 0)
+    MinBar.Position = UDim2.new(0.5, 0, 0, 20)
+    MinBar.Size = UDim2.new(0, 420, 0, 52)
+    MinBar.BackgroundColor3 = C.bg
+    MinBar.BorderSizePixel = 0
+    MinBar.Active = true
+    MinBar.Draggable = true
+    MinBar.Visible = false
+    MinBar.ZIndex = 1001
+    addCorner(MinBar, 14)
+    local minBarStroke = addStroke(MinBar, 2, C.white)
+
+    task.spawn(function()
+        while MinBar.Parent do
+            TweenService:Create(minBarStroke, GlowTween, {Transparency = 0.7}):Play()
+            task.wait(1.5)
+            if not MinBar.Parent then break end
+            TweenService:Create(minBarStroke, GlowTween, {Transparency = 0}):Play()
+            task.wait(1.5)
+        end
+    end)
+
+    local MinBarDot = Instance.new("Frame", MinBar)
+    MinBarDot.Size = UDim2.new(0, 12, 0, 12)
+    MinBarDot.Position = UDim2.new(0, 16, 0.5, -6)
+    MinBarDot.BackgroundColor3 = C.cyan
+    MinBarDot.BorderSizePixel = 0
+    addCorner(MinBarDot, 99)
+
+    task.spawn(function()
+        while MinBarDot.Parent do
+            TweenService:Create(MinBarDot, TweenInfo.new(1, Enum.EasingStyle.Sine), {BackgroundTransparency = 0.5}):Play()
+            task.wait(1)
+            if not MinBarDot.Parent then break end
+            TweenService:Create(MinBarDot, TweenInfo.new(1, Enum.EasingStyle.Sine), {BackgroundTransparency = 0}):Play()
+            task.wait(1)
+        end
+    end)
+
+    local MinBarLabel = Instance.new("TextLabel", MinBar)
+    MinBarLabel.Size = UDim2.new(1, -180, 0, 18)
+    MinBarLabel.Position = UDim2.new(0, 40, 0, 8)
+    MinBarLabel.BackgroundTransparency = 1
+    MinBarFontSize = 13
+    MinBarLabel.Font = Enum.Font.GothamBlack
+    MinBarLabel.Text = "LION SCANNER"
+    MinBarLabel.TextColor3 = C.white
+    MinBarLabel.TextSize = 13
+    MinBarLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+    local MinBarSub = Instance.new("TextLabel", MinBar)
+    MinBarSub.Size = UDim2.new(1, -180, 0, 14)
+    MinBarSub.Position = UDim2.new(0, 40, 0, 26)
+    MinBarSub.BackgroundTransparency = 1
+    MinBarSub.Font = Enum.Font.Gotham
+    MinBarSub.Text = "0 IDs found"
+    MinBarSub.TextColor3 = C.dim
+    MinBarSub.TextSize = 9
+    MinBarSub.TextXAlignment = Enum.TextXAlignment.Left
+
+    local MinBarRestore = Instance.new("TextButton", MinBar)
+    MinBarRestore.AnchorPoint = Vector2.new(1, 0.5)
+    MinBarRestore.Position = UDim2.new(1, -46, 0.5, 0)
+    MinBarRestore.Size = UDim2.new(0, 30, 0, 30)
+    MinBarRestore.BackgroundColor3 = C.control
+    MinBarRestore.Text = "▲"
+    MinBarRestore.TextColor3 = C.white
+    MinBarRestore.Font = Enum.Font.GothamBold
+    MinBarRestore.TextSize = 12
+    MinBarRestore.AutoButtonColor = false
+    addCorner(MinBarRestore, 7)
+    addStroke(MinBarRestore, 1, C.border)
+
+    local MinBarClose = Instance.new("TextButton", MinBar)
+    MinBarClose.AnchorPoint = Vector2.new(1, 0.5)
+    MinBarClose.Position = UDim2.new(1, -12, 0.5, 0)
+    MinBarClose.Size = UDim2.new(0, 30, 0, 30)
+    MinBarClose.BackgroundColor3 = C.control
+    MinBarClose.Text = "✕"
+    MinBarClose.TextColor3 = C.white
+    MinBarClose.Font = Enum.Font.GothamBold
+    MinBarClose.TextSize = 13
+    MinBarClose.AutoButtonColor = false
+    addCorner(MinBarClose, 7)
+    addStroke(MinBarClose, 1, C.border)
+
+    -- MAIN
+    local Main = Instance.new("Frame", ScreenGui)
+    Main.AnchorPoint = Vector2.new(0.5, 0.5)
+    Main.Position = UDim2.new(0.5, 0, 0.5, 0)
+    Main.Size = UDim2.new(0, W, 0, H)
+    Main.BackgroundColor3 = C.bg
+    Main.BorderSizePixel = 0
+    Main.Active = true
+    Main.Draggable = true
+    addCorner(Main, 14)
+    local mainStroke = addStroke(Main, 2, C.white)
+
+    Main.Size = UDim2.new(0, 0, 0, 0)
+    Main.BackgroundTransparency = 1
+    task.spawn(function()
+        task.wait(0.05)
+        TweenService:Create(Main, BounceTween, {
+            Size = UDim2.new(0, W, 0, H),
+            BackgroundTransparency = 0
+        }):Play()
+    end)
+
+    task.spawn(function()
+        while Main.Parent do
+            TweenService:Create(mainStroke, GlowTween, {Transparency = 0.7}):Play()
+            task.wait(1.5)
+            if not Main.Parent then break end
+            TweenService:Create(mainStroke, GlowTween, {Transparency = 0}):Play()
+            task.wait(1.5)
+        end
+    end)
+
+    -- HEADER
+    local Header = Instance.new("Frame", Main)
+    Header.Size = UDim2.new(1, 0, 0, 48)
+    Header.BackgroundColor3 = C.bg2
+    Header.BorderSizePixel = 0
+    addCorner(Header, 14)
+
+    local Logo = Instance.new("Frame", Header)
+    Logo.Size = UDim2.new(0, 32, 0, 32)
+    Logo.Position = UDim2.new(0, 12, 0.5, -16)
+    Logo.BackgroundColor3 = C.white
+    Logo.BorderSizePixel = 0
+    addCorner(Logo, 9)
+
+    local LogoInner = Instance.new("Frame", Logo)
+    LogoInner.AnchorPoint = Vector2.new(0.5, 0.5)
+    LogoInner.Position = UDim2.new(0.5, 0, 0.5, 0)
+    LogoInner.Size = UDim2.new(0, 10, 0, 10)
+    LogoInner.BackgroundColor3 = C.bg
+    LogoInner.BorderSizePixel = 0
+    addCorner(LogoInner, 99)
+
+    task.spawn(function()
+        while Logo.Parent do
+            TweenService:Create(LogoInner, TweenInfo.new(1.2), {Size = UDim2.new(0, 18, 0, 18)}):Play()
+            task.wait(1.2)
+            if not LogoInner.Parent then break end
+            TweenService:Create(LogoInner, TweenInfo.new(1.2), {Size = UDim2.new(0, 10, 0, 10)}):Play()
+            task.wait(1.2)
+        end
+    end)
+
+    local Title = Instance.new("TextLabel", Header)
+    Title.Size = UDim2.new(1, -200, 0, 20)
+    Title.Position = UDim2.new(0, 54, 0, 8)
+    Title.BackgroundTransparency = 1
+    Title.Font = Enum.Font.GothamBlack
+    Title.Text = "LION  SCANNER"
+    Title.TextColor3 = C.white
+    Title.TextSize = 15
+    Title.TextXAlignment = Enum.TextXAlignment.Left
+
+    local SubTitle = Instance.new("TextLabel", Header)
+    SubTitle.Size = UDim2.new(1, -200, 0, 12)
+    SubTitle.Position = UDim2.new(0, 54, 0, 28)
+    SubTitle.BackgroundTransparency = 1
+    SubTitle.Font = Enum.Font.Gotham
+    SubTitle.Text = "v" .. VERSION .. " · " .. string.upper(Settings.device)
+    SubTitle.TextColor3 = C.dim
+    SubTitle.TextSize = 8
+    SubTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+    local CloseBtn = Instance.new("TextButton", Header)
+    CloseBtn.AnchorPoint = Vector2.new(1, 0.5)
+    CloseBtn.Position = UDim2.new(1, -10, 0.5, 0)
+    CloseBtn.Size = UDim2.new(0, 28, 0, 28)
+    CloseBtn.BackgroundColor3 = C.control
+    CloseBtn.Text = "✕"
+    CloseBtn.TextColor3 = C.white
+    CloseBtn.Font = Enum.Font.GothamBold
+    CloseBtn.TextSize = 13
+    CloseBtn.AutoButtonColor = false
+    addCorner(CloseBtn, 8)
+    addStroke(CloseBtn, 1, C.border)
+    CloseBtn.MouseEnter:Connect(function()
+        TweenService:Create(CloseBtn, FastTween, {BackgroundColor3 = C.white, TextColor3 = C.bg}):Play()
+    end)
+    CloseBtn.MouseLeave:Connect(function()
+        TweenService:Create(CloseBtn, FastTween, {BackgroundColor3 = C.control, TextColor3 = C.white}):Play()
+    end)
+    CloseBtn.MouseButton1Click:Connect(function()
+        TweenService:Create(Main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+            Size = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1
+        }):Play()
+        task.wait(0.35)
+        ScreenGui:Destroy()
+    end)
+
+    local MinBtn = Instance.new("TextButton", Header)
+    MinBtn.AnchorPoint = Vector2.new(1, 0.5)
+    MinBtn.Position = UDim2.new(1, -44, 0.5, 0)
+    MinBtn.Size = UDim2.new(0, 28, 0, 28)
+    MinBtn.BackgroundColor3 = C.control
+    MinBtn.Text = "▼"
+    MinBtn.TextColor3 = C.white
+    MinBtn.Font = Enum.Font.GothamBold
+    MinBtn.TextSize = 13
+    MinBtn.AutoButtonColor = false
+    addCorner(MinBtn, 8)
+    addStroke(MinBtn, 1, C.border)
+    MinBtn.MouseEnter:Connect(function()
+        TweenService:Create(MinBtn, FastTween, {BackgroundColor3 = C.white, TextColor3 = C.bg}):Play()
+    end)
+    MinBtn.MouseLeave:Connect(function()
+        TweenService:Create(MinBtn, FastTween, {BackgroundColor3 = C.control, TextColor3 = C.white}):Play()
+    end)
+
+    -- NAV BAR
+    local NavBar = Instance.new("Frame", Main)
+    NavBar.Size = UDim2.new(1, -20, 0, 40)
+    NavBar.Position = UDim2.new(0, 10, 0, 56)
+    NavBar.BackgroundColor3 = C.bg2
+    NavBar.BorderSizePixel = 0
+    addCorner(NavBar, 10)
+    addStroke(NavBar, 1, C.border)
+
+    local Tabs = {"IMAGES", "TEXTURES", "SOUNDS", "MESHES", "ANIMATIONS", "PARTICLES", "REMOTES", "PINNED", "SEARCH"}
+    local tabButtons = {}
+    local tabWidth = (W - 20 - 8) / 4
+    local tabHeight = 32
+    local row2 = false
+    local currentTab = "IMAGES"
+    local contentY = 106
+    local Panels = {}
+
+    for i, name in ipairs(Tabs) do
+        local row = math.ceil(i / 4) - 1
+        local col = ((i - 1) % 4)
+        local btn = Instance.new("TextButton", NavBar)
+        btn.Size = UDim2.new(0, tabWidth - 2, 0, tabHeight)
+        btn.Position = UDim2.new(0, col * tabWidth + 1, 0, row * (tabHeight + 2) + 2)
+        btn.BackgroundTransparency = 1
+        btn.Text = name
+        btn.TextColor3 = name == "IMAGES" and C.white or C.dim
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 8
+        btn.AutoButtonColor = false
+
+        local underline = Instance.new("Frame", btn)
+        underline.Name = "Underline"
+        underline.AnchorPoint = Vector2.new(0.5, 1)
+        underline.Position = UDim2.new(0.5, 0, 1, -2)
+        underline.Size = UDim2.new(0, name == "IMAGES" and (tabWidth - 20) or 0, 0, 2)
+        underline.BackgroundColor3 = C.white
+        underline.BorderSizePixel = 0
+        addCorner(underline, 2)
+
+        btn.MouseButton1Click:Connect(function()
+            currentTab = name
+            for n, b in pairs(tabButtons) do
+                TweenService:Create(b, FastTween, {TextColor3 = (n == name) and C.white or C.dim}):Play()
+                local ul = b:FindFirstChild("Underline")
+                if ul then
+                    TweenService:Create(ul, FastTween, {Size = UDim2.new(0, n == name and (tabWidth - 20) or 0, 0, 2)}):Play()
+                end
+            end
+            for n, panel in pairs(Panels) do
+                panel.Visible = false
+            end
+            if Panels[name] then
+                Panels[name].Visible = true
+                Panels[name].Position = UDim2.new(0, 10, 0, contentY + 15)
+                TweenService:Create(Panels[name], FastTween, {Position = UDim2.new(0, 10, 0, contentY)}):Play()
+            end
+        end)
+
+        tabButtons[name] = btn
+    end
+
+    NavBar.Size = UDim2.new(1, -20, 0, 70)
+
+    for _, name in ipairs(Tabs) do
+        local panel = Instance.new("Frame", Main)
+        panel.Name = name .. "Panel"
+        panel.Size = UDim2.new(1, -20, 1, -(contentY + 14))
+        panel.Position = UDim2.new(0, 10, 0, contentY)
+        panel.BackgroundTransparency = 1
+        panel.Visible = (name == "IMAGES")
+        Panels[name] = panel
+    end
+
+    -- MIN / RESTORE
+    local function minimizeToBar()
+        TweenService:Create(Main, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+            Size = UDim2.new(0, W, 0, 0),
+            BackgroundTransparency = 0.5
+        }):Play()
+        task.wait(0.35)
+        Main.Visible = false
+        MinBar.Visible = true
+    end
+
+    local function restoreFromBar()
+        MinBar.Visible = false
+        Main.Visible = true
+        Main.Size = UDim2.new(0, W, 0, 0)
+        Main.BackgroundTransparency = 0.5
+        TweenService:Create(Main, BounceTween, {
+            Size = UDim2.new(0, W, 0, H),
+            BackgroundTransparency = 0
+        }):Play()
+    end
+
+    MinBtn.MouseButton1Click:Connect(minimizeToBar)
+    MinBarRestore.MouseButton1Click:Connect(restoreFromBar)
+    MinBarClose.MouseButton1Click:Connect(function()
+        TweenService:Create(Main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+            Size = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1
+        }):Play()
+        TweenService:Create(MinBar, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+            Size = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1
+        }):Play()
+        task.wait(0.35)
+        ScreenGui:Destroy()
+    end)
+    MinBarDot.MouseButton1Click:Connect(restoreFromBar)
+
+    -- FLOATING
+    local FloatBtn = Instance.new("TextButton", ScreenGui)
+    FloatBtn.AnchorPoint = Vector2.new(1, 1)
+    FloatBtn.Position = UDim2.new(1, -20, 1, -20)
+    FloatBtn.Size = UDim2.new(0, 50, 0, 50)
+    FloatBtn.BackgroundColor3 = C.bg
+    FloatBtn.BorderSizePixel = 0
+    FloatBtn.AutoButtonColor = false
+    FloatBtn.Text = "ID"
+    FloatBtn.TextColor3 = C.cyan
+    FloatBtn.Font = Enum.Font.GothamBlack
+    FloatBtn.TextSize = 16
+    addCorner(FloatBtn, 25)
+    addStroke(FloatBtn, 2, C.cyan)
+
+    FloatBtn.MouseButton1Click:Connect(function()
+        Main.Visible = not Main.Visible
+        MinBar.Visible = false
+        if Main.Visible then
+            Main.Size = UDim2.new(0, 0, 0, 0)
+            TweenService:Create(Main, BounceTween, {Size = UDim2.new(0, W, 0, H)}):Play()
+        end
+    end)
+
+    -- KEYBIND
+    UserInputService.InputBegan:Connect(function(input, gp)
+        if gp then return end
+        if input.KeyCode == Enum.KeyCode.RightShift then
+            if Main.Visible then minimizeToBar() else restoreFromBar() end
+        end
+    end)
+
+    -- Expose for Chunk 2
+    _G.LionScanner = {
+        ScreenGui = ScreenGui,
+        Main = Main,
+        MinBar = MinBar,
+        MinBarSub = MinBarSub,
+        Panels = Panels,
+        W = W,
+        H = H,
+        scale = scale,
+        C = C,
+        FastTween = FastTween,
+        BounceTween = BounceTween,
+        GlowTween = GlowTween,
+        addCorner = addCorner,
+        addStroke = addStroke,
+        extractId = extractId,
+        copyToClipboard = copyToClipboard,
+        getStatusColor = getStatusColor,
+        fallbackName = fallbackName,
+        AssetCache = AssetCache,
+        FetchQueue = FetchQueue,
+        Settings = Settings,
+        savePins = savePins,
+        ASSET_ICONS = ASSET_ICONS,
+        Tabs = Tabs,
+        tabButtons = tabButtons,
+        contentY = contentY,
+    }
+
+    print("[LION SCANNER] Chunk 1 loaded — building panels next")
+    
+    if _G.LionScannerBuildChunk2 then
+        _G.LionScannerBuildChunk2()
+    end
+end
+
+print("[LION SCANNER] Device chooser shown")-- =====================================================================
+--   LION SCANNER v2.2 — CHUNK 2 of 2
+--   Tab panels · Scan functions · Cards · Preview · Pinned · Search
+-- =====================================================================
+
+_G.LionScannerBuildChunk2 = function()
+    local S = _G.LionScanner
+    if not S then
+        warn("[LION SCANNER] Chunk 1 not loaded — cannot build Chunk 2")
+        return
+    end
+
+    local C = S.C
+    local Panels = S.Panels
+    local Settings = S.Settings
+    local AssetCache = S.AssetCache
+    local FetchQueue = S.FetchQueue
+    local ASSET_ICONS = S.ASSET_ICONS
+    local FastTween = S.FastTween
+    local BounceTween = S.BounceTween
+    local GlowTween = S.GlowTween
+    local addCorner = S.addCorner
+    local addStroke = S.addStroke
+    local extractId = S.extractId
+    local copyToClipboard = S.copyToClipboard
+    local getStatusColor = S.getStatusColor
+    local fallbackName = S.fallbackName
+    local savePins = S.savePins
+    local MinBarSub = S.MinBarSub
+
+    -- ===================== SCAN FUNCTIONS =====================
+    local function makeCard(name, id, path, isRemote, typeClass)
+        return {name = name, id = id, path = path, type = typeClass, isRemote = isRemote}
+    end
+
+    local function scanImage(obj, out)
+        if not obj:IsA("ImageLabel") and not obj:IsA("ImageButton") then return end
+        local src = obj.Image
+        local id = extractId(src)
+        if not id then return end
+        if out.seen[id] then return end
+        out.seen[id] = true
+        table.insert(out.list, makeCard(fallbackName(obj, id), id, obj:GetFullName(), false))
+        table.insert(FetchQueue, {id = id})
+    end
+
+    local function scanDecal(obj, out)
+        if not obj:IsA("Decal") then return end
+        local src = obj.Texture
+        local id = extractId(src)
+        if not id then return end
+        if out.seen[id] then return end
+        out.seen[id] = true
+        table.insert(out.list, makeCard(fallbackName(obj, id), id, obj:GetFullName(), false))
+        table.insert(FetchQueue, {id = id})
+    end
+
+    local function scanTexture(obj, out)
+        if not obj:IsA("Texture") then return end
+        local src = obj.Texture
+        local id = extractId(src)
+        if not id then return end
+        if out.seen[id] then return end
+        out.seen[id] = true
+        table.insert(out.list, makeCard(fallbackName(obj, id), id, obj:GetFullName(), false))
+        table.insert(FetchQueue, {id = id})
+    end
+
+    local function scanSound(obj, out)
+        if not obj:IsA("Sound") then return end
+        local src = obj.SoundId
+        local id = extractId(src)
+        if not id then return end
+        if out.seen[id] then return end
+        out.seen[id] = true
+        table.insert(out.list, makeCard(fallbackName(obj, id), id, obj:GetFullName(), false))
+        table.insert(FetchQueue, {id = id})
+    end
+
+    local function scanMesh(obj, out)
+        local src
+        if obj:IsA("MeshPart") then src = obj.MeshId
+        elseif obj:IsA("SpecialMesh") then src = obj.MeshId
+        else return end
+        local id = extractId(src)
+        if not id then return end
+        if out.seen[id] then return end
+        out.seen[id] = true
+        table.insert(out.list, makeCard(fallbackName(obj, id), id, obj:GetFullName(), false))
+        table.insert(FetchQueue, {id = id})
+    end
+
+    local function scanAnimation(obj, out)
+        if not obj:IsA("Animation") then return end
+        local src = obj.AnimationId
+        local id = extractId(src)
+        if not id then return end
+        if out.seen[id] then return end
+        out.seen[id] = true
+        table.insert(out.list, makeCard(fallbackName(obj, id), id, obj:GetFullName(), false))
+        table.insert(FetchQueue, {id = id})
+    end
+
+    local function scanParticles(obj, out)
+        if not (obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail")) then return end
+        local src = obj.Texture
+        if not src or src == "" then return end
+        local id = extractId(src)
+        if not id then return end
+        if out.seen[id] then return end
+        out.seen[id] = true
+        table.insert(out.list, makeCard(fallbackName(obj, id), id, obj:GetFullName(), false))
+        table.insert(FetchQueue, {id = id})
+    end
+
+    local function scanRemote(obj, out)
+        if not (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("BindableEvent") or obj:IsA("BindableFunction")) then return end
+        local path = obj:GetFullName()
+        if out.seen[path] then return end
+        out.seen[path] = true
+        table.insert(out.list, makeCard(obj.Name, nil, path, true, obj.ClassName))
+    end
+
+    local function scanAll(scanFunc)
+        local out = {seen = {}, list = {}}
+        pcall(function()
+            local pg = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+            if pg then for _, obj in ipairs(pg:GetDescendants()) do scanFunc(obj, out) end end
+        end)
+        pcall(function()
+            for _, obj in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do scanFunc(obj, out) end
+        end)
+        pcall(function()
+            for _, obj in ipairs(workspace:GetDescendants()) do scanFunc(obj, out) end
+        end)
+        pcall(function()
+            for _, obj in ipairs(game:GetService("Players").LocalPlayer:GetDescendants()) do scanFunc(obj, out) end
+        end)
+        pcall(function()
+            local ss = game:GetService("SoundService")
+            for _, obj in ipairs(ss:GetDescendants()) do scanFunc(obj, out) end
+        end)
+        return out.list
+    end
+
+    local function getDisplayName(item)
+        if item.isRemote then return item.name end
+        if item.id and AssetCache[item.id] and AssetCache[item.id].name then
+            local cache = AssetCache[item.id]
+            local display = cache.name
+            if cache.creator and cache.creator ~= "Roblox" then
+                display = display .. " · " .. cache.creator
+            end
+            return display
+        end
+        return item.name
+    end
+
+    -- ===================== PREVIEW POPUP =====================
+    local function showPreview(id, name)
+        if not id then return end
+
+        local popup = Instance.new("Frame", S.ScreenGui)
+        popup.AnchorPoint = Vector2.new(0.5, 0.5)
+        popup.Position = UDim2.new(0.5, 0, 0.5, 0)
+        popup.Size = UDim2.new(0, 320, 0, 340)
+        popup.BackgroundColor3 = C.bg
+        popup.BorderSizePixel = 0
+        popup.ZIndex = 1001
+        addCorner(popup, 14)
+        addStroke(popup, 2, C.cyan)
+
+        popup.Size = UDim2.new(0, 0, 0, 0)
+        TweenService:Create(popup, BounceTween, {Size = UDim2.new(0, 320, 0, 340)}):Play()
+
+        local title = Instance.new("TextLabel", popup)
+        title.Size = UDim2.new(1, -20, 0, 24)
+        title.Position = UDim2.new(0, 10, 0, 12)
+        title.BackgroundTransparency = 1
+        title.Font = Enum.Font.GothamBlack
+        title.Text = name or "PREVIEW"
+        title.TextColor3 = C.white
+        title.TextSize = 13
+        title.TextTruncate = Enum.TextTruncate.AtEnd
+        title.TextXAlignment = Enum.TextXAlignment.Left
+
+        local close = Instance.new("TextButton", popup)
+        close.AnchorPoint = Vector2.new(1, 0)
+        close.Position = UDim2.new(1, -10, 0, 12)
+        close.Size = UDim2.new(0, 26, 0, 26)
+        close.BackgroundColor3 = C.control
+        close.Text = "✕"
+        close.TextColor3 = C.white
+        close.Font = Enum.Font.GothamBold
+        close.TextSize = 12
+        close.AutoButtonColor = false
+        addCorner(close, 6)
+        addStroke(close, 1, C.border)
+        close.MouseButton1Click:Connect(function()
+            TweenService:Create(popup, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+                Size = UDim2.new(0, 0, 0, 0)
+            }):Play()
+            task.wait(0.28)
+            popup:Destroy()
+        end)
+
+        local previewBox = Instance.new("Frame", popup)
+        previewBox.Size = UDim2.new(1, -40, 0, 180)
+        previewBox.Position = UDim2.new(0, 20, 0, 50)
+        previewBox.BackgroundColor3 = C.bg2
+        previewBox.BorderSizePixel = 0
+        addCorner(previewBox, 10)
+        addStroke(previewBox, 1, C.border)
+
+        local previewImg = Instance.new("ImageLabel", previewBox)
+        previewImg.Size = UDim2.new(1, -20, 1, -20)
+        previewImg.Position = UDim2.new(0, 10, 0, 10)
+        previewImg.BackgroundTransparency = 1
+        previewImg.Image = "rbxthumb://type=Asset&id=" .. id .. "&w=420&h=420"
+        previewImg.ScaleType = Enum.ScaleType.Fit
+
+        local idLbl = Instance.new("TextLabel", popup)
+        idLbl.Size = UDim2.new(1, -40, 0, 20)
+        idLbl.Position = UDim2.new(0, 20, 0, 240)
+        idLbl.BackgroundTransparency = 1
+        idLbl.Font = Enum.Font.GothamBold
+        idLbl.Text = "rbxassetid://" .. id
+        idLbl.TextColor3 = C.cyan
+        idLbl.TextSize = 11
+        idLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+        local copyBtn = Instance.new("TextButton", popup)
+        copyBtn.Size = UDim2.new(0.5, -26, 0, 34)
+        copyBtn.Position = UDim2.new(0, 20, 1, -48)
+        copyBtn.BackgroundColor3 = C.white
+        copyBtn.Text = "COPY ID"
+        copyBtn.TextColor3 = C.bg
+        copyBtn.Font = Enum.Font.GothamBlack
+        copyBtn.TextSize = 10
+        copyBtn.AutoButtonColor = false
+        addCorner(copyBtn, 8)
+        copyBtn.MouseButton1Click:Connect(function()
+            copyToClipboard("rbxassetid://" .. id)
+            copyBtn.Text = "COPIED"
+            task.wait(0.8)
+            copyBtn.Text = "COPY ID"
+        end)
+
+        local marketBtn = Instance.new("TextButton", popup)
+        marketBtn.Size = UDim2.new(0.5, -26, 0, 34)
+        marketBtn.Position = UDim2.new(0.5, 6, 1, -48)
+        marketBtn.BackgroundColor3 = C.control
+        marketBtn.Text = "VIEW MARKET"
+        marketBtn.TextColor3 = C.white
+        marketBtn.Font = Enum.Font.GothamBold
+        marketBtn.TextSize = 10
+        marketBtn.AutoButtonColor = false
+        addCorner(marketBtn, 8)
+        addStroke(marketBtn, 1, C.border)
+        marketBtn.MouseButton1Click:Connect(function()
+            pcall(function()
+                game:GetService("GuiService"):OpenBrowserWindow("https://www.roblox.com/library/" .. id)
+            end)
+        end)
+    end
+
+    -- ===================== CARD BUILDER =====================
+    local function makeResultCard(parent, item, color, index, tabName)
+        local card = Instance.new("Frame", parent)
+        local isRemote = item.isRemote
+        card.Size = UDim2.new(1, -8, 0, isRemote and 60 or 56)
+        card.BackgroundColor3 = C.card
+        card.BorderSizePixel = 0
+        card.LayoutOrder = index
+        addCorner(card, 8)
+        local cardStroke = addStroke(card, 1, C.border)
+
+        local colorBar = Instance.new("Frame", card)
+        colorBar.Size = UDim2.new(0, 3, 0.6, 0)
+        colorBar.Position = UDim2.new(0, 0, 0.2, 0)
+        colorBar.BackgroundColor3 = color
+        colorBar.BorderSizePixel = 0
+        addCorner(colorBar, 3)
+
+        -- Image preview beside ID
+        if not isRemote and item.id then
+            local imgBox = Instance.new("Frame", card)
+            imgBox.Size = UDim2.new(0, 40, 0, 40)
+            imgBox.Position = UDim2.new(0, 10, 0.5, -20)
+            imgBox.BackgroundColor3 = C.bg2
+            imgBox.BorderSizePixel = 0
+            addCorner(imgBox, 6)
+            addStroke(imgBox, 1, C.border)
+
+            local imgPreview = Instance.new("ImageLabel", imgBox)
+            imgPreview.Size = UDim2.new(1, -4, 1, -4)
+            imgPreview.Position = UDim2.new(0, 2, 0, 2)
+            imgPreview.BackgroundTransparency = 1
+            imgPreview.Image = "rbxthumb://type=Asset&id=" .. item.id .. "&w=150&h=150"
+            imgPreview.ScaleType = Enum.ScaleType.Fit
+            addCorner(imgPreview, 4)
+
+            imgBox.MouseEnter:Connect(function()
+                TweenService:Create(imgBox, FastTween, {Size = UDim2.new(0, 44, 0, 44), Position = UDim2.new(0, 8, 0.5, -22)}):Play()
+            end)
+            imgBox.MouseLeave:Connect(function()
+                TweenService:Create(imgBox, FastTween, {Size = UDim2.new(0, 40, 0, 40), Position = UDim2.new(0, 10, 0.5, -20)}):Play()
+            end)
+        end
+
+        local textX = (not isRemote and item.id) and 58 or 14
+
+        local nameLbl = Instance.new("TextLabel", card)
+        nameLbl.Size = UDim2.new(1, -(textX + 130), 0, 18)
+        nameLbl.Position = UDim2.new(0, textX, 0, 6)
+        nameLbl.BackgroundTransparency = 1
+        nameLbl.Font = Enum.Font.GothamBold
+        nameLbl.Text = getDisplayName(item)
+        nameLbl.TextColor3 = C.white
+        nameLbl.TextSize = 11
+        nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+        nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+        if item.id and not item.isRemote then
+            task.spawn(function()
+                local tries = 0
+                while tries < 40 do
+                    tries = tries + 1
+                    if AssetCache[item.id] and AssetCache[item.id].name then
+                        if nameLbl and nameLbl.Parent then
+                            nameLbl.Text = getDisplayName(item)
+                        end
+                        break
+                    end
+                    task.wait(0.25)
+                end
+            end)
+        end
+
+        if isRemote then
+            local typeLbl = Instance.new("TextLabel", card)
+            typeLbl.Size = UDim2.new(1, -130, 0, 14)
+            typeLbl.Position = UDim2.new(0, 14, 0, 26)
+            typeLbl.BackgroundTransparency = 1
+            typeLbl.Font = Enum.Font.Gotham
+            typeLbl.Text = "[" .. (item.type or "?") .. "]"
+            typeLbl.TextColor3 = color
+            typeLbl.TextSize = 9
+            typeLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+            local pathLbl = Instance.new("TextLabel", card)
+            pathLbl.Size = UDim2.new(1, -20, 0, 14)
+            pathLbl.Position = UDim2.new(0, 14, 0, 42)
+            pathLbl.BackgroundTransparency = 1
+            pathLbl.Font = Enum.Font.Gotham
+            pathLbl.Text = item.path
+            pathLbl.TextColor3 = C.dim2
+            pathLbl.TextSize = 8
+            pathLbl.TextXAlignment = Enum.TextXAlignment.Left
+            pathLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        else
+            local idLbl = Instance.new("TextLabel", card)
+            idLbl.Size = UDim2.new(1, -(textX + 130), 0, 14)
+            idLbl.Position = UDim2.new(0, textX, 0, 26)
+            idLbl.BackgroundTransparency = 1
+            idLbl.Font = Enum.Font.GothamBold
+            idLbl.Text = "rbxassetid://" .. (item.id or "?")
+            idLbl.TextColor3 = color
+            idLbl.TextSize = 10
+            idLbl.TextXAlignment = Enum.TextXAlignment.Left
+            idLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+            local pathLbl = Instance.new("TextLabel", card)
+            pathLbl.Size = UDim2.new(1, -(textX + 20), 0, 12)
+            pathLbl.Position = UDim2.new(0, textX, 0, 42)
+            pathLbl.BackgroundTransparency = 1
+            pathLbl.Font = Enum.Font.Gotham
+            pathLbl.Text = item.path or ""
+            pathLbl.TextColor3 = C.dim2
+            pathLbl.TextSize = 8
+            pathLbl.TextXAlignment = Enum.TextXAlignment.Left
+            pathLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        end
+
+        -- PIN button
+        local pinBtn = Instance.new("TextButton", card)
+        pinBtn.AnchorPoint = Vector2.new(1, 0.5)
+        pinBtn.Position = UDim2.new(1, -104, 0.5, 0)
+        pinBtn.Size = UDim2.new(0, 26, 0, 26)
+        pinBtn.BackgroundColor3 = C.control
+        pinBtn.Text = "☆"
+        pinBtn.TextColor3 = C.dim
+        pinBtn.Font = Enum.Font.GothamBold
+        pinBtn.TextSize = 15
+        pinBtn.AutoButtonColor = false
+        addCorner(pinBtn, 6)
+        addStroke(pinBtn, 1, C.border)
+
+        local pinKey = item.id or item.path or item.name
+        if Settings.pinned[pinKey] then
+            pinBtn.Text = "★"
+            pinBtn.TextColor3 = C.gold
+        end
+
+        pinBtn.MouseButton1Click:Connect(function()
+            if Settings.pinned[pinKey] then
+                Settings.pinned[pinKey] = nil
+                pinBtn.Text = "☆"
+                pinBtn.TextColor3 = C.dim
+            else
+                Settings.pinned[pinKey] = item
+                pinBtn.Text = "★"
+                pinBtn.TextColor3 = C.gold
+            end
+            savePins()
+        end)
+
+        -- Open preview on card click (image/texture only)
+        if not isRemote and item.id then
+            local click = Instance.new("TextButton", card)
+            click.Size = UDim2.new(1, -110, 1, 0)
+            click.BackgroundTransparency = 1
+            click.Text = ""
+            click.ZIndex = 1
+            click.MouseButton1Click:Connect(function()
+                showPreview(item.id, item.name)
+            end)
+        end
+
+        local copyBtn = Instance.new("TextButton", card)
+        copyBtn.AnchorPoint = Vector2.new(1, 0.5)
+        copyBtn.Position = UDim2.new(1, -8, 0.5, 0)
+        copyBtn.Size = UDim2.new(0, 82, 0, 26)
+        copyBtn.BackgroundColor3 = C.control
+        copyBtn.Text = "COPY"
+        copyBtn.TextColor3 = C.white
+        copyBtn.Font = Enum.Font.GothamBold
+        copyBtn.TextSize = 9
+        copyBtn.AutoButtonColor = false
+        addCorner(copyBtn, 6)
+        addStroke(copyBtn, 1, C.border)
+
+        copyBtn.MouseButton1Click:Connect(function()
+            local text
+            if isRemote then
+                text = "[" .. (item.type or "?") .. "] " .. item.path
+            else
+                text = getDisplayName(item) .. " | rbxassetid://" .. item.id
+            end
+            if copyToClipboard(text) then
+                copyBtn.Text = "✓"
+                task.wait(0.6)
+                copyBtn.Text = "COPY"
+            end
+        end)
+
+        card.MouseEnter:Connect(function()
+            TweenService:Create(card, FastTween, {BackgroundColor3 = C.cardHover}):Play()
+            TweenService:Create(cardStroke, FastTween, {Color = C.borderHi}):Play()
+        end)
+        card.MouseLeave:Connect(function()
+            TweenService:Create(card, FastTween, {BackgroundColor3 = C.card}):Play()
+            TweenService:Create(cardStroke, FastTween, {Color = C.border}):Play()
+        end)
+    end
+
+    -- ===================== TAB CONTENT BUILDER =====================
+    local function buildTabContent(tabName, panel, color, scanFn, isRemote)
+        for _, child in ipairs(panel:GetChildren()) do
+            child:Destroy()
+        end
+
+        local topBar = Instance.new("Frame", panel)
+        topBar.Size = UDim2.new(1, 0, 0, 40)
+        topBar.BackgroundColor3 = C.card
+        topBar.BorderSizePixel = 0
+        addCorner(topBar, 10)
+        addStroke(topBar, 1.5, C.border)
+
+        -- Pulsing status circle INSIDE the tab
+        local StatusCircle = Instance.new("Frame", topBar)
+        StatusCircle.Size = UDim2.new(0, 22, 0, 22)
+        StatusCircle.Position = UDim2.new(0, 8, 0.5, -11)
+        StatusCircle.BackgroundColor3 = C.red
+        StatusCircle.BackgroundTransparency = 0.2
+        StatusCircle.BorderSizePixel = 0
+        addCorner(StatusCircle, 99)
+
+        local StatusRing = Instance.new("Frame", StatusCircle)
+        StatusRing.AnchorPoint = Vector2.new(0.5, 0.5)
+        StatusRing.Position = UDim2.new(0.5, 0, 0.5, 0)
+        StatusRing.Size = UDim2.new(0, 22, 0, 22)
+        StatusRing.BackgroundTransparency = 1
+        StatusRing.BorderSizePixel = 0
+        addCorner(StatusRing, 99)
+        local ringStroke = addStroke(StatusRing, 2, C.red)
+
+        task.spawn(function()
+            while StatusCircle.Parent do
+                TweenService:Create(StatusRing, TweenInfo.new(1.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                    Size = UDim2.new(0, 42, 0, 42),
+                }):Play()
+                TweenService:Create(ringStroke, TweenInfo.new(1.2), {Transparency = 1}):Play()
+                task.wait(1.2)
+                if not StatusRing.Parent then break end
+                StatusRing.Size = UDim2.new(0, 22, 0, 22)
+                ringStroke.Transparency = 0
+            end
+        end)
+
+        local scanBtn = Instance.new("TextButton", topBar)
+        scanBtn.Size = UDim2.new(0, 150, 0, 30)
+        scanBtn.Position = UDim2.new(0, 38, 0.5, -15)
+        scanBtn.BackgroundColor3 = C.white
+        scanBtn.Text = "SCAN " .. tabName
+        scanBtn.TextColor3 = C.bg
+        scanBtn.Font = Enum.Font.GothamBlack
+        scanBtn.TextSize = 10
+        scanBtn.AutoButtonColor = false
+        addCorner(scanBtn, 8)
+
+        local statusLbl = Instance.new("TextLabel", topBar)
+        statusLbl.Size = UDim2.new(1, -290, 1, 0)
+        statusLbl.Position = UDim2.new(0, 194, 0, 0)
+        statusLbl.BackgroundTransparency = 1
+        statusLbl.Font = Enum.Font.GothamBold
+        statusLbl.Text = "Not scanned"
+        statusLbl.TextColor3 = C.dim
+        statusLbl.TextSize = 9
+        statusLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+        local countLbl = Instance.new("TextLabel", topBar)
+        countLbl.AnchorPoint = Vector2.new(1, 0.5)
+        countLbl.Position = UDim2.new(1, -10, 0.5, 0)
+        countLbl.Size = UDim2.new(0, 40, 1, 0)
+        countLbl.BackgroundTransparency = 1
+        countLbl.Font = Enum.Font.GothamBlack
+        countLbl.Text = "0"
+        countLbl.TextColor3 = color
+        countLbl.TextSize = 18
+        countLbl.TextXAlignment = Enum.TextXAlignment.Right
+
+        -- Progress bar
+        local progressBg = Instance.new("Frame", panel)
+        progressBg.Size = UDim2.new(1, 0, 0, 2)
+        progressBg.Position = UDim2.new(0, 0, 0, 42)
+        progressBg.BackgroundColor3 = C.border
+        progressBg.BorderSizePixel = 0
+        progressBg.BackgroundTransparency = 1
+
+        local progressBar = Instance.new("Frame", progressBg)
+        progressBar.Size = UDim2.new(0, 0, 1, 0)
+        progressBar.BackgroundColor3 = color
+        progressBar.BorderSizePixel = 0
+
+        -- Search bar
+        local searchFrame = Instance.new("Frame", panel)
+        searchFrame.Size = UDim2.new(1, 0, 0, 30)
+        searchFrame.Position = UDim2.new(0, 0, 0, 48)
+        searchFrame.BackgroundColor3 = C.card
+        searchFrame.BorderSizePixel = 0
+        addCorner(searchFrame, 8)
+        addStroke(searchFrame, 1, C.border)
+
+        local searchBox = Instance.new("TextBox", searchFrame)
+        searchBox.Size = UDim2.new(1, -70, 1, 0)
+        searchBox.Position = UDim2.new(0, 10, 0, 0)
+        searchBox.BackgroundTransparency = 1
+        searchBox.Font = Enum.Font.Gotham
+        searchBox.PlaceholderText = "Filter..."
+        searchBox.PlaceholderColor3 = C.dim
+        searchBox.Text = ""
+        searchBox.TextColor3 = C.white
+        searchBox.TextSize = 10
+        searchBox.TextXAlignment = Enum.TextXAlignment.Left
+        searchBox.ClearTextOnFocus = false
+
+        local sortBtn = Instance.new("TextButton", searchFrame)
+        sortBtn.AnchorPoint = Vector2.new(1, 0.5)
+        sortBtn.Position = UDim2.new(1, -6, 0.5, 0)
+        sortBtn.Size = UDim2.new(0, 50, 0, 22)
+        sortBtn.BackgroundColor3 = C.control
+        sortBtn.Text = "A-Z"
+        sortBtn.TextColor3 = C.white
+        sortBtn.Font = Enum.Font.GothamBold
+        sortBtn.TextSize = 8
+        sortBtn.AutoButtonColor = false
+        addCorner(sortBtn, 6)
+        addStroke(sortBtn, 1, C.border)
+
+        -- Scroll
+        local scroll = Instance.new("ScrollingFrame", panel)
+        scroll.Size = UDim2.new(1, 0, 1, -84)
+        scroll.Position = UDim2.new(0, 0, 0, 82)
+        scroll.BackgroundTransparency = 1
+        scroll.BorderSizePixel = 0
+        scroll.ScrollBarThickness = 4
+        scroll.ScrollBarImageColor3 = color
+        scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+
+        local listLayout = Instance.new("UIListLayout", scroll)
+        listLayout.Padding = UDim.new(0, 4)
+        listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+        local currentList = {}
+        local sortMode = "az"
+
+        local function sortList(list)
+            if sortMode == "az" then
+                table.sort(list, function(a, b)
+                    return string.lower(getDisplayName(a) or "") < string.lower(getDisplayName(b) or "")
+                end)
+            end
+            return list
+        end
+
+        local function refreshDisplay()
+            for _, child in ipairs(scroll:GetChildren()) do
+                if child:IsA("Frame") then child:Destroy() end
+            end
+            local q = string.lower(searchBox.Text)
+            local filtered = {}
+            for _, item in ipairs(currentList) do
+                local match = true
+                if q ~= "" then
+                    local nameMatch = string.find(string.lower(getDisplayName(item) or ""), q, 1, true)
+                    local idMatch = item.id and string.find(item.id, q, 1, true)
+                    local pathMatch = item.path and string.find(string.lower(item.path), q, 1, true)
+                    if not (nameMatch or idMatch or pathMatch) then match = false end
+                end
+                if match then table.insert(filtered, item) end
+            end
+            filtered = sortList(filtered)
+            local shown = 0
+            for _, item in ipairs(filtered) do
+                shown = shown + 1
+                makeResultCard(scroll, item, color, shown, tabName)
+            end
+            scroll.CanvasSize = UDim2.new(0, 0, 0, shown * 66 + 10)
+        end
+
+        searchBox:GetPropertyChangedSignal("Text"):Connect(refreshDisplay)
+
+        sortBtn.MouseButton1Click:Connect(function()
+            if sortMode == "az" then
+                sortMode = "none"
+                sortBtn.Text = "UNSORT"
+            else
+                sortMode = "az"
+                sortBtn.Text = "A-Z"
+            end
+            refreshDisplay()
+        end)
+
+        scanBtn.MouseButton1Click:Connect(function()
+            scanBtn.Text = "SCANNING..."
+            statusLbl.Text = "Scanning..."
+            statusLbl.TextColor3 = C.cyan
+            countLbl.Text = "···"
+            progressBg.BackgroundTransparency = 0
+            progressBar.Size = UDim2.new(0, 0, 1, 0)
+
+            task.spawn(function()
+                for i = 1, 10 do
+                    TweenService:Create(progressBar, TweenInfo.new(0.08), {
+                        Size = UDim2.new(i / 10, 0, 1, 0)
+                    }):Play()
+                    task.wait(0.08)
+                end
+            end)
+
+            task.wait(0.05)
+
+            currentList = scanAll(scanFn)
+            countLbl.Text = tostring(#currentList)
+            scanBtn.Text = "SCAN " .. tabName
+
+            local statusColor = getStatusColor(#currentList)
+            StatusCircle.BackgroundColor3 = statusColor
+            ringStroke.Color = statusColor
+
+            Settings.tabCounts[tabName] = #currentList
+            Settings.totalCount = 0
+            for _, v in pairs(Settings.tabCounts) do
+                Settings.totalCount = Settings.totalCount + v
+            end
+            if MinBarSub and MinBarSub.Parent then
+                MinBarSub.Text = Settings.totalCount .. " IDs found"
+            end
+
+            if #currentList > 0 then
+                statusLbl.Text = "✓ " .. #currentList .. " found"
+                statusLbl.TextColor3 = C.green
+                local text = "=== " .. tabName .. " (" .. #currentList .. ") ===\n"
+                for _, item in ipairs(currentList) do
+                    if isRemote then
+                        text = text .. "[" .. (item.type or "?") .. "] " .. item.path .. "\n"
+                    else
+                        text = text .. (item.name or "?") .. " | rbxassetid://" .. (item.id or "?") .. "\n"
+                    end
+                end
+                copyToClipboard(text)
+            else
+                statusLbl.Text = "None found"
+                statusLbl.TextColor3 = C.red
+            end
+
+            task.wait(0.3)
+            progressBg.BackgroundTransparency = 1
+            refreshDisplay()
+        end)
+    end
+
+    -- Build all tabs
+    buildTabContent("IMAGES", Panels["IMAGES"], C.cyan, scanImage, false)
+    buildTabContent("TEXTURES", Panels["TEXTURES"], C.blue, function(o, out) scanDecal(o, out); scanTexture(o, out) end, false)
+    buildTabContent("SOUNDS", Panels["SOUNDS"], C.green, scanSound, false)
+    buildTabContent("MESHES", Panels["MESHES"], C.white, scanMesh, false)
+    buildTabContent("ANIMATIONS", Panels["ANIMATIONS"], C.cyan, scanAnimation, false)
+    buildTabContent("PARTICLES", Panels["PARTICLES"], C.blue, scanParticles, false)
+    buildTabContent("REMOTES", Panels["REMOTES"], C.white, scanRemote, true)
+
+    -- ===================== PINNED TAB =====================
+    local PinnedPanel = Panels["PINNED"]
+    local pinnedTitle = Instance.new("TextLabel", PinnedPanel)
+    pinnedTitle.Size = UDim2.new(1, 0, 0, 24)
+    pinnedTitle.BackgroundTransparency = 1
+    pinnedTitle.Font = Enum.Font.GothamBlack
+    pinnedTitle.Text = "★ PINNED IDs"
+    pinnedTitle.TextColor3 = C.gold
+    pinnedTitle.TextSize = 12
+    pinnedTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+    local pinnedScroll = Instance.new("ScrollingFrame", PinnedPanel)
+    pinnedScroll.Size = UDim2.new(1, 0, 1, -30)
+    pinnedScroll.Position = UDim2.new(0, 0, 0, 30)
+    pinnedScroll.BackgroundTransparency = 1
+    pinnedScroll.BorderSizePixel = 0
+    pinnedScroll.ScrollBarThickness = 4
+    pinnedScroll.ScrollBarImageColor3 = C.gold
+    pinnedScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+
+    local pinLayout = Instance.new("UIListLayout", pinnedScroll)
+    pinLayout.Padding = UDim.new(0, 4)
+    pinLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local function refreshPinned()
+        for _, child in ipairs(pinnedScroll:GetChildren()) do
+            if child:IsA("Frame") then child:Destroy() end
+        end
+        local count = 0
+        for key, item in pairs(Settings.pinned) do
+            count = count + 1
+            makeResultCard(pinnedScroll, item, C.gold, count, "PINNED")
+        end
+        pinnedScroll.CanvasSize = UDim2.new(0, 0, 0, count * 66 + 10)
+    end
+
+    -- Refresh pinned when tab clicked
+    S.tabButtons["PINNED"].MouseButton1Click:Connect(function()
+        task.wait(0.1)
+        refreshPinned()
+    end)
+
+    -- ===================== SEARCH TAB =====================
+    local SearchPanel = Panels["SEARCH"]
+
+    local searchTopBar = Instance.new("Frame", SearchPanel)
+    searchTopBar.Size = UDim2.new(1, 0, 0, 66)
+    searchTopBar.BackgroundColor3 = C.card
+    searchTopBar.BorderSizePixel = 0
+    addCorner(searchTopBar, 10)
+    addStroke(searchTopBar, 1.5, C.border)
+
+    local searchLabel = Instance.new("TextLabel", searchTopBar)
+    searchLabel.Size = UDim2.new(1, -20, 0, 16)
+    searchLabel.Position = UDim2.new(0, 12, 0, 8)
+    searchLabel.BackgroundTransparency = 1
+    searchLabel.Font = Enum.Font.GothamBlack
+    searchLabel.Text = "SEARCH ANY ID"
+    searchLabel.TextColor3 = C.white
+    searchLabel.TextSize = 12
+    searchLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+    local searchInput = Instance.new("TextBox", searchTopBar)
+    searchInput.Size = UDim2.new(1, -130, 0, 30)
+    searchInput.Position = UDim2.new(0, 12, 0, 28)
+    searchInput.BackgroundColor3 = C.bg
+    searchInput.BorderSizePixel = 0
+    searchInput.Font = Enum.Font.Gotham
+    searchInput.PlaceholderText = "Enter ID number"
+    searchInput.PlaceholderColor3 = C.dim
+    searchInput.Text = ""
+    searchInput.TextColor3 = C.white
+    searchInput.TextSize = 10
+    searchInput.TextXAlignment = Enum.TextXAlignment.Left
+    searchInput.ClearTextOnFocus = false
+    addCorner(searchInput, 8)
+    addStroke(searchInput, 1, C.border)
+
+    local searchGo = Instance.new("TextButton", searchTopBar)
+    searchGo.AnchorPoint = Vector2.new(1, 0)
+    searchGo.Position = UDim2.new(1, -12, 0, 28)
+    searchGo.Size = UDim2.new(0, 100, 0, 30)
+    searchGo.BackgroundColor3 = C.white
+    searchGo.Text = "SEARCH"
+    searchGo.TextColor3 = C.bg
+    searchGo.Font = Enum.Font.GothamBlack
+    searchGo.TextSize = 10
+    searchGo.AutoButtonColor = false
+    addCorner(searchGo, 8)
+
+    local searchStatus = Instance.new("TextLabel", SearchPanel)
+    searchStatus.Size = UDim2.new(1, 0, 0, 20)
+    searchStatus.Position = UDim2.new(0, 0, 0, 72)
+    searchStatus.BackgroundColor3 = C.bg2
+    searchStatus.BorderSizePixel = 0
+    searchStatus.Font = Enum.Font.GothamBold
+    searchStatus.Text = "Enter an ID to find it"
+    searchStatus.TextColor3 = C.dim
+    searchStatus.TextSize = 10
+    addCorner(searchStatus, 8)
+    addStroke(searchStatus, 1, C.border)
+
+    -- Search history chips
+    local chipFrame = Instance.new("Frame", SearchPanel)
+    chipFrame.Size = UDim2.new(1, 0, 0, 26)
+    chipFrame.Position = UDim2.new(0, 0, 0, 98)
+    chipFrame.BackgroundTransparency = 1
+
+    local chipLayout = Instance.new("UIListLayout", chipFrame)
+    chipLayout.FillDirection = Enum.FillDirection.Horizontal
+    chipLayout.Padding = UDim.new(0, 4)
+    chipLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local function refreshChips()
+        for _, child in ipairs(chipFrame:GetChildren()) do
+            if child:IsA("TextButton") then child:Destroy() end
+        end
+        for i = 1, math.min(#Settings.searchHistory, 5) do
+            local id = Settings.searchHistory[i]
+            local chip = Instance.new("TextButton", chipFrame)
+            chip.Size = UDim2.new(0, 70, 1, 0)
+            chip.BackgroundColor3 = C.control
+            chip.Text = id
+            chip.TextColor3 = C.dim
+            chip.Font = Enum.Font.GothamBold
+            chip.TextSize = 9
+            chip.AutoButtonColor = false
+            chip.LayoutOrder = i
+            addCorner(chip, 12)
+            addStroke(chip, 1, C.border)
+            chip.MouseButton1Click:Connect(function()
+                searchInput.Text = id
+            end)
+        end
+    end
+
+    local searchScroll = Instance.new("ScrollingFrame", SearchPanel)
+    searchScroll.Size = UDim2.new(1, 0, 1, -130)
+    searchScroll.Position = UDim2.new(0, 0, 0, 128)
+    searchScroll.BackgroundTransparency = 1
+    searchScroll.BorderSizePixel = 0
+    searchScroll.ScrollBarThickness = 4
+    searchScroll.ScrollBarImageColor3 = C.cyan
+    searchScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+
+    local searchLayout = Instance.new("UIListLayout", searchScroll)
+    searchLayout.Padding = UDim.new(0, 4)
+    searchLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    searchGo.MouseButton1Click:Connect(function()
+        local searchId = string.match(searchInput.Text, "(%d+)")
+        if not searchId then
+            searchStatus.Text = "Enter a valid ID"
+            searchStatus.TextColor3 = C.red
+            return
+        end
+
+        -- Add to history
+        table.insert(Settings.searchHistory, 1, searchId)
+        if #Settings.searchHistory > 5 then
+            table.remove(Settings.searchHistory)
+        end
+        refreshChips()
+
+        searchStatus.Text = "Searching " .. searchId .. "..."
+        searchStatus.TextColor3 = C.cyan
+        searchGo.Text = "..."
+
+        for _, child in ipairs(searchScroll:GetChildren()) do
+            if child:IsA("Frame") then child:Destroy() end
+        end
+
+        local found = {}
+
+        local function checkObj(obj)
+            pcall(function()
+                local src
+                if obj:IsA("ImageLabel") or obj:IsA("ImageButton") then src = obj.Image
+                elseif obj:IsA("Decal") or obj:IsA("Texture") then src = obj.Texture
+                elseif obj:IsA("Sound") then src = obj.SoundId
+                elseif obj:IsA("MeshPart") or obj:IsA("SpecialMesh") then src = obj.MeshId
+                elseif obj:IsA("Animation") then src = obj.AnimationId
+                elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail") then src = obj.Texture
+                end
+                if src and string.find(src, searchId, 1, true) then
+                    table.insert(found, {name = obj.Name, id = searchId, path = obj:GetFullName(), isRemote = false})
+                end
+            end)
+        end
+
+        local pg = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+        if pg then for _, obj in ipairs(pg:GetDescendants()) do checkObj(obj) end end
+        for _, obj in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do checkObj(obj) end
+        for _, obj in ipairs(workspace:GetDescendants()) do checkObj(obj) end
+
+        searchGo.Text = "SEARCH"
+
+        if #found > 0 then
+            searchStatus.Text = "✓ " .. #found .. " matches"
+            searchStatus.TextColor3 = C.green
+            for i, item in ipairs(found) do
+                makeResultCard(searchScroll, item, C.cyan, i, "SEARCH")
+            end
+            searchScroll.CanvasSize = UDim2.new(0, 0, 0, #found * 66 + 10)
+            local text = "=== " .. searchId .. " (" .. #found .. ") ===\n"
+            for _, item in ipairs(found) do
+                text = text .. item.name .. " | " .. item.path .. "\n"
+            end
+            copyToClipboard(text)
+        else
+            searchStatus.Text = "No matches for " .. searchId
+            searchStatus.TextColor3 = C.red
+        end
+    end)
+
+    refreshChips()
+    refreshPinned()
+
+    print("[LION SCANNER] Chunk 2 loaded — all tabs built")
+    print("[LION SCANNER] v" .. VERSION .. " fully ready")
+end
+
+-- If Chunk 1 already ran and built the UI, run Chunk 2 now
+if _G.LionScanner then
+    _G.LionScannerBuildChunk2()
+end
+
+print("[LION SCANNER] Chunk 2 registered")
